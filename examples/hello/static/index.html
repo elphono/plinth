@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hello</title>
+<link rel="stylesheet" href="/plinth/static/ihm.css">
+<link rel="stylesheet" href="/static/hello/hello.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1 class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 20h16"/><path d="M6 20V9h12v11"/><path d="M9 9V5h6v4"/>
+      </svg>hello</h1>
+    <span class="daemon" data-ihm-daemon>Connecting to the daemon…</span>
+    <span class="segmented" role="group" aria-label="Theme">
+      <button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+    </span>
+  </div>
+</header>
+<main class="layout">
+  <div id="tiles" class="card tiles" aria-label="Overview"></div>
+  <form id="add" class="toolbar">
+    <input id="name" placeholder="A name to add" autocomplete="off" spellcheck="false"
+           aria-label="Name of the item to add">
+    <button type="submit" id="add-button" class="primary">Add</button>
+  </form>
+  <div id="sections" class="sections"></div>
+</main>
+<script src="/plinth/static/ihm.js"></script>
+<script src="/static/hello/hello.js"></script>
+</body>
+</html>

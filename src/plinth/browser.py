@@ -1,0 +1,70 @@
+"""Open a URL in the user's browser.
+
+| Platform (plinth.platform) | Openers, tried in order                    |
+|----------------------------|--------------------------------------------|
+| WSL                        | `wslview` (wslu), `cmd.exe /c start`, `explorer.exe`: the Windows browser |
+| Linux                      | `xdg-open`                                 |
+| macOS                      | `open`                                     |
+
+Each is looked up on the PATH; none is written as an absolute path. Under
+systemd the PATH is the one the unit declares.
+
+`cmd.exe` refuses a UNC working directory ("UNC paths are not supported"):
+Windows programs run from their own folder.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+
+from .platform import platform
+
+
+class OpenError(Exception):
+    """No opener could open the URL."""
+
+
+NATIVE = {"linux": "xdg-open", "macos": "open"}
+# explorer.exe returns 1 even when it opened the URL: only a launch failure
+# counts for it (its exit code is ignored).
+EXIT_CODE_IGNORED = frozenset({"explorer.exe"})
+
+
+def openers(url: str) -> list[list[str]]:
+    native = NATIVE.get(platform())
+    if native:
+        path = shutil.which(native)
+        return [[path, url]] if path else []
+    if platform() != "wsl":
+        return []
+    found = []
+    if path := shutil.which("wslview"):
+        found.append([path, url])
+    if path := shutil.which("cmd.exe"):
+        # The empty "" is the window title `start` expects before the target.
+        found.append([path, "/c", "start", "", url])
+    if path := shutil.which("explorer.exe"):
+        found.append([path, url])
+    return found
+
+
+def open_url(url: str) -> str:
+    """Open `url`; return the opener used. Raise OpenError if none worked."""
+    candidates = openers(url)
+    if not candidates:
+        names = NATIVE.get(platform()) or "wslview, cmd.exe, explorer.exe"
+        raise OpenError(f"no opener found on the PATH ({names}): open the URL by hand: {url}")
+    errors = []
+    for command in candidates:
+        cwd = os.path.dirname(command[0]) if command[0].endswith(".exe") else None
+        try:
+            done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"{command[0]}: {exc}")
+            continue
+        name = os.path.basename(command[0])
+        if done.returncode == 0 or name in EXIT_CODE_IGNORED:
+            return name
+        errors.append(f"{command[0]} exited {done.returncode}: {done.stderr.strip()[:200]}")
+    raise OpenError("could not open " + url + ": " + "; ".join(errors))

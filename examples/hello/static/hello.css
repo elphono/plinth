@@ -1,0 +1,4 @@
+/* hello's own blocks, loaded after plinth's ihm.css. A UI redefines tokens
+   here too: the accent of hello is plinth's own, so none is redefined. */
+#add input { flex: 1 1 220px; }
+.row .actions details.ihm-menu .menu { min-width: 180px; }

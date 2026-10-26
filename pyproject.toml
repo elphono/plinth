@@ -1,0 +1,66 @@
+[project]
+name = "plinth"
+dynamic = ["version"]
+description = "A shared base for local web UIs: a guarded HTTP daemon on 127.0.0.1, a stylesheet, page utilities, a terminal launcher and test tooling"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["local", "web-ui", "http.server", "daemon", "loopback"]
+# No runtime dependency, on purpose: the daemon is `http.server`, the config is
+# `tomllib`, the static files are read through `importlib.resources`. A UI that
+# depends on plinth keeps the promise "standard library only, plus plinth".
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/plinth/__init__.py"
+
+# The package folder goes into the wheel whole: its modules, `static/ihm.css`,
+# `static/ihm.js`, `testing/helpers.mjs` and `py.typed`. tests/test_wheel.py
+# builds the wheel, installs it in an empty folder and reads them back.
+[tool.hatch.build.targets.wheel]
+packages = ["src/plinth"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/plinth", "examples", "tests", "README.md", "LICENSE"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "examples"]
+testpaths = ["tests"]
+markers = [
+    "browser: drives a real headless Chromium through Playwright (run explicitly: -m browser)",
+]
+addopts = "-m 'not browser'"
+
+[tool.mypy]
+files = ["src/plinth", "examples/hello", "tests"]
+mypy_path = ["src", "examples", "tests"]
+check_untyped_defs = true
+explicit_package_bases = true
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = ["plinth", "plinth.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.ruff]
+line-length = 100
+
+# The set docpin keeps green, plus bugbear and pyupgrade. E501 is left out:
+# shell lines and messages are long by nature.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "B", "UP"]

@@ -28,7 +28,7 @@ Python ≥ 3.12.
 
 | Pièce | Le socle fournit | L'IHM fournit |
 |---|---|---|
-| `plinth.server` | `App(name, header, port, *, code_dirs)`, `@app.route(method, pattern)`, `Refused`, les gardes appliquées **avant** toute route, `stale`, `serve(app)` | ses routes, ses exceptions → codes HTTP (`map_error`), ses fils de fond |
+| `plinth.server` | `App(name, header, port, *, code_dirs)`, `@app.route(method, pattern)`, `Refused`, les gardes appliquées **avant** toute route, `stale`, `serve(app)`, le refus d'un premier Ctrl-C quand l'IHM est occupée | ses routes, ses exceptions → codes HTTP (`map_error`), ses fils de fond, ce qu'un arrêt couperait (`app.busy`) |
 | `static/ihm.css` | jetons sémantiques clair / sombre / forcé, composants | une feuille chargée après, qui redéfinit des jetons et ajoute ses blocs |
 | `static/ihm.js` | l'espace de noms `Ihm` (script classique) | sa fonction `render(data)` et ses gestionnaires |
 | `plinth.client`, `config`, `platform`, `browser` | appel au démon, démarrage à la demande, configuration env > TOML > défaut, ouvrir une URL | son nom, son dataclass de réglages |
@@ -252,6 +252,22 @@ uv add --editable ../plinth
 L'IHM sert alors **ses** statiques à côté de ceux du socle : `/plinth/static/ihm.css` et
 `/plinth/static/ihm.js` viennent du paquet installé (`importlib.resources`, aucun chemin
 composé), et `app.add_static("/static/<ihm>", dossier)` sert les siens.
+
+## Un arrêt qui couperait un travail en cours
+
+Une IHM qui fait tourner un travail à elle (une commande dans un terminal de sa page, par exemple)
+le tuerait sur un Ctrl-C de trop. Elle déclare ce qu'un arrêt couperait :
+
+```python
+app.busy(lambda: "« make » tourne encore." if job.running else "",
+         hint="Ctrl-C une seconde fois dans les {grace:g} s pour arrêter quand même.")
+```
+
+Tant que la fonction rend une phrase, un premier SIGINT est **refusé** : `serve` l'écrit, suivie de
+`hint`, et continue. Un second dans les `BUSY_GRACE` secondes (5) arrête. SIGTERM arrête toujours :
+il vient d'un gestionnaire de services ou de quelqu'un qui le veut. Une fonction qui échoue compte
+comme occupée : dans le doute, le travail continue. Fermer la fenêtre du terminal (SIGHUP) n'est
+pas couvert : le processus meurt avec elle.
 
 ## Développer plinth
 

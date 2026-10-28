@@ -46,6 +46,15 @@ Reserved paths, under `/plinth/`:
 A UI serves its own files with `app.add_static(prefix, folder)`: same rule,
 only a file listed under that folder, so no request can leave it.
 
+**Stopping while busy.** A daemon that runs work of its own (a command in a
+terminal of its page, say) would kill it on a stray Ctrl-C. `app.busy(check)`
+declares what a stop would cut: `check()` returns "" when nothing, else the
+sentence to print. While it says something, a first SIGINT is refused and
+that sentence printed, with `hint`; a second SIGINT within `BUSY_GRACE`
+seconds stops anyway. SIGTERM always stops: it comes from a service manager
+or a person who meant it, never from a slip of the finger. A `check` that
+fails counts as busy: a doubt never stops the work.
+
 **`stale`**: the fingerprint (name, size, date) of the modules of plinth and
 of the UI's `code_dirs`, taken at start, compared with the disk. The page is
 read from disk at every request, the Python once: after an update, a new page
@@ -78,6 +87,8 @@ log = logging.getLogger("plinth")
 
 LOOPBACK = "127.0.0.1"
 MAX_BODY = 2 * 1024 * 1024
+BUSY_GRACE = 5.0                  # seconds in which a second Ctrl-C stops a busy daemon
+BUSY_HINT = "Press Ctrl-C again within {grace:g} s to stop anyway."
 RESERVED = "/plinth"
 SAFE_METHODS = frozenset({"GET", "HEAD"})
 ROUTE_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
@@ -326,6 +337,7 @@ class App:
         self._routes: list[_Route] = []
         self._errors: list[tuple[type[BaseException], HTTPStatus]] = []
         self._background: list[tuple[str, Callable[[threading.Event], None]]] = []
+        self._busy: tuple[Callable[[], str], str] | None = None
         self._server: Server | None = None
         self._add("GET", "/plinth/status", self._status)
         self._add("GET", "/plinth/static/{name}", self._plinth_static)
@@ -380,6 +392,22 @@ class App:
         """A thread `serve` starts with the daemon; it should return once the
         event it receives is set (the daemon is stopping)."""
         self._background.append((name, target))
+
+    def busy(self, check: Callable[[], str], *, hint: str = BUSY_HINT) -> None:
+        """What a stop would cut: `check()` returns "" when nothing, else the
+        sentence `serve` prints when it refuses a first Ctrl-C, followed by
+        `hint` (`{grace}`: BUSY_GRACE). See the module docstring."""
+        self._busy = (check, hint)
+
+    def busy_text(self) -> str:
+        """What a stop would cut now ("" when nothing): the check of `busy`,
+        or what made it fail."""
+        if self._busy is None:
+            return ""
+        try:
+            return str(self._busy[0]() or "")
+        except Exception as exc:  # noqa: BLE001 - a doubt never stops the work
+            return f"busy check failed ({type(exc).__name__}: {exc})"
 
     # -- state ------------------------------------------------------------------
     @property
@@ -566,16 +594,33 @@ class _Handler(BaseHTTPRequestHandler):
 
 @dataclass
 class _StopFlag:
-    """Set by the signal handler. A plain attribute, no lock: a handler that
-    takes a lock can deadlock when a second signal interrupts it."""
+    """Set by the signal handler. Plain attributes, no lock: a handler that
+    takes a lock can deadlock when a second signal interrupts it. The handler
+    only records the signal and when; the loop of `serve` decides."""
 
     requested: bool = False
+    signals: list[tuple[int, float]] = field(default_factory=list)
+    warned_at: float | None = None
     threads: list[threading.Thread] = field(default_factory=list)
+
+    def decide(self, app: App) -> None:
+        """Turn the signals received into a stop, or into a refusal said."""
+        while self.signals and not self.requested:
+            signum, at = self.signals.pop(0)
+            if signum == signal.SIGINT:
+                why = app.busy_text()
+                if why and not (self.warned_at is not None and at - self.warned_at <= BUSY_GRACE):
+                    self.warned_at = at
+                    hint = app._busy[1] if app._busy else BUSY_HINT
+                    log.warning("%s %s", why, hint.format(grace=BUSY_GRACE))
+                    continue
+            self.requested = True
 
 
 def serve(app: App, *, port: int | None = None,
           on_ready: Callable[[str], None] | None = None) -> int:
-    """Run the daemon until SIGTERM or SIGINT; return 0. Call it from the main
+    """Run the daemon until SIGTERM or SIGINT (a first SIGINT is refused while
+    `app.busy` says something); return 0. Call it from the main
     thread (signal handlers can only be set there). `on_ready` receives the
     URL once the socket listens; the background threads get an event set at
     shutdown."""
@@ -583,7 +628,7 @@ def serve(app: App, *, port: int | None = None,
     flag = _StopFlag()
 
     def on_signal(signum: int, frame: FrameType | None) -> None:
-        flag.requested = True
+        flag.signals.append((signum, time.monotonic()))
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
@@ -599,6 +644,7 @@ def serve(app: App, *, port: int | None = None,
         on_ready(srv.base_url())
     while not flag.requested:
         time.sleep(0.2)
+        flag.decide(app)
     # From here on, a late signal must not kill the interpreter while it
     # finalises.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)

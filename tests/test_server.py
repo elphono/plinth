@@ -456,6 +456,110 @@ def test_serve_runs_until_sigterm_and_stops_its_background_threads(tmp_path):
     assert done.read_text() == "stopped"
 
 
+BUSY_SCRIPT = textwrap.dedent("""
+    import sys
+    from pathlib import Path
+    from plinth import App, serve
+
+    busy = Path(sys.argv[1])
+    app = App("ui", "X-Ui", 0, code_dirs=())
+
+    def check():
+        text = busy.read_text() if busy.exists() else ""
+        if text == "raise":
+            raise RuntimeError("unreadable")
+        return text
+
+    app.busy(check, hint="Again to stop.")
+    raise SystemExit(serve(app, on_ready=lambda url: print(url, flush=True)))
+""")
+
+
+def start_busy(tmp_path, said):
+    flag = tmp_path / "busy"
+    if said:
+        flag.write_text(said)
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    proc = subprocess.Popen([sys.executable, "-c", BUSY_SCRIPT, str(flag)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    assert proc.stdout is not None
+    url = proc.stdout.readline().strip()
+    assert url.startswith("http://127.0.0.1:"), url
+    return proc, flag
+
+
+def stopped_within(proc, seconds):
+    try:
+        return proc.wait(timeout=seconds) == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def finish(proc):
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait(timeout=5)
+    assert proc.stderr is not None
+    return proc.stderr.read()
+
+
+def test_a_busy_daemon_refuses_a_first_ctrl_c_and_says_why_a_second_one_stops_it(tmp_path):
+    proc, _ = start_busy(tmp_path, "« deploy » runs in a terminal of the page.")
+    try:
+        proc.send_signal(signal.SIGINT)
+        assert not stopped_within(proc, 1.5)
+        proc.send_signal(signal.SIGINT)
+        assert stopped_within(proc, 15)
+    finally:
+        err = finish(proc)
+    assert err.count("« deploy » runs in a terminal of the page. Again to stop.") == 1
+
+
+def test_a_second_ctrl_c_after_the_grace_is_a_first_one_again(tmp_path):
+    proc, _ = start_busy(tmp_path, "busy.")
+    try:
+        for _ in range(3):                                   # three refusals: the state does not trap itself
+            proc.send_signal(signal.SIGINT)
+            assert not stopped_within(proc, server.BUSY_GRACE + 0.7)
+    finally:
+        err = finish(proc)
+    assert err.count("busy. Again to stop.") == 3
+
+
+@pytest.mark.parametrize("said, stops", [("", True), ("raise", False)])
+def test_an_idle_daemon_stops_on_ctrl_c_and_a_failing_check_counts_as_busy(tmp_path, said, stops):
+    proc, _ = start_busy(tmp_path, said)
+    try:
+        proc.send_signal(signal.SIGINT)
+        assert stopped_within(proc, 15 if stops else 1.5) is stops
+    finally:
+        err = finish(proc)
+    assert ("busy check failed (RuntimeError: unreadable)" in err) is not stops
+
+
+def test_sigterm_stops_a_busy_daemon_at_once(tmp_path):
+    proc, _ = start_busy(tmp_path, "busy.")
+    try:
+        proc.send_signal(signal.SIGTERM)
+        assert stopped_within(proc, 15)
+    finally:
+        err = finish(proc)
+    assert "busy." not in err
+
+
+def test_the_busy_check_is_read_when_the_signal_comes_not_at_start(tmp_path):
+    proc, flag = start_busy(tmp_path, "")
+    try:
+        flag.write_text("busy now.")
+        proc.send_signal(signal.SIGINT)
+        assert not stopped_within(proc, 1.5)
+        flag.write_text("")
+        proc.send_signal(signal.SIGINT)
+        assert stopped_within(proc, 15)
+    finally:
+        finish(proc)
+
+
 def test_a_port_already_taken_is_a_server_error(tmp_path):
     taken = socket.socket()
     taken.bind(("127.0.0.1", 0))
